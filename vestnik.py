@@ -4,31 +4,24 @@ import logging
 import random
 import datetime
 import argparse
+import configparser
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatMember, ChatMemberUpdated
 from telegram.ext import Updater, CallbackContext, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, Filters, Defaults
 from telegram.error import Unauthorized, NetworkError
 
-daily_list_file = 'daily_list.json'
-config_file = 'vestnik.conf'
-data_file = 'data.json'
-
-welcome_file = 'welcome.txt'
-stranger_file = 'stranger.txt'
-left_channel_file = 'leftchannel.txt'
-sub_message_file = 'submessage.txt'
-card_caption_file = 'cardcaption.txt'
+logger = logging.getLogger(__name__)
 
 
 def is_member(update: Update, context: CallbackContext):
 	user_id = update.effective_user.id
-	result = context.bot.get_chat_member(channel_id, user_id)
+	result = context.bot.get_chat_member(keys['channel'], user_id)
 	return result.status in ['member', 'administrator']
 
 
 def start(update: Update, context: CallbackContext):
 	if is_member(update, context):
-		with open(welcome_file) as f:
+		with open(paths['welcome']) as f:
 			welcome_message = f.read().strip()
 
 		markup = get_start_ik(str(update.effective_user.id) in daily_ids)
@@ -38,11 +31,11 @@ def start(update: Update, context: CallbackContext):
 
 
 def stranger_reply(update: Update):
-	with open(stranger_file) as f:
+	with open(paths['stranger']) as f:
 		stranger_message = f.read().strip()
 
 	markup = InlineKeyboardMarkup([[
-		InlineKeyboardButton("Подписаться", f"https://t.me/{invite_link}")
+		InlineKeyboardButton("Подписаться", f"https://t.me/{keys['invite']}")
 	]])
 	update.effective_message.reply_text(stranger_message, reply_markup=markup)
 
@@ -117,7 +110,7 @@ def track_channel_members(update: Update, context: CallbackContext):
 	elif was_member and not is_member:
 		logger.info(f"{user.full_name} ({user.id}) left the channel")
 		if str(user.id) in daily_ids:
-			with open(left_channel_file) as f:
+			with open(paths['left_channel']) as f:
 				left_channel_message = f.read().strip()
 
 			context.bot.send_message(user.id, left_channel_message)
@@ -160,7 +153,7 @@ def remove_user(user_id, user_name=None):
 
 
 def save_daily_list():
-	with open(daily_list_file, 'w') as f:
+	with open(paths['sub_list'], 'w') as f:
 		json.dump(daily_ids, f)
 
 
@@ -176,20 +169,20 @@ def send_message(context: CallbackContext):
 
 def send_reminder(context: CallbackContext, chat_id):
 	try:
-		with open(sub_message_file) as f:
+		with open(paths['sub_message']) as f:
 			context.bot.send_message(chat_id, f.read().strip())
 	except Unauthorized:
 		remove_blocked_user(context, chat_id)
 
 
 def send_daily_card(context: CallbackContext, chat_id):
-	with open(data_file) as f:
+	with open(paths['data']) as f:
 		data = json.load(f)
 
 	card_id = random.randrange(78)
 	decks = list(data['decks'].items())
 	deck_id, deck_name = random.choice(decks)
-	image_path = f"{image_dir}/{deck_id}/{card_id}.jpg"
+	image_path = f"{paths['image_dir']}/{deck_id}/{card_id}.jpg"
 
 	if card_id > 21:
 		rank = (card_id - 22) % 14
@@ -211,7 +204,7 @@ def send_daily_card(context: CallbackContext, chat_id):
 	     if deck_id in meanings
 	     else meanings['normal'])
 
-	with open(card_caption_file) as f:
+	with open(paths['card_caption']) as f:
 		caption = f.read().strip().format(name, deck_name, meanings[card_id])
 
 	try:
@@ -243,27 +236,23 @@ def error_callback(_: Update, context: CallbackContext):
 
 
 def main():
-	global daily_ids, channel_id, invite_link, image_dir
+	global daily_ids, keys, paths
 
 	arg_parser = argparse.ArgumentParser()
 	arg_parser.add_argument('-l', '--list', action='store_true', help='list subscribers')
 	args = arg_parser.parse_args()
 
-	config = {}
-	with open(config_file) as f:
-		for line in f:
-			key, val = line.strip().split('=')
-			config[key] = val
+	config_file = 'vestnik.conf'
+	config = configparser.ConfigParser()
+	config.read(config_file)
+	keys = config['keys']
+	paths = config['paths']
+	job_hour = config.getint('time', 'hour')
 
-	token = config['token']
-	channel_id = config['channel']
-	invite_link = config['invite']
-	image_dir = config['image_dir']
-
-	updater = Updater(token, defaults=Defaults(parse_mode='HTML'))
+	updater = Updater(keys['token'], defaults=Defaults(parse_mode='HTML'))
 
 	if args.list:
-		with open(daily_list_file) as f:
+		with open(paths['sub_list']) as f:
 			for user_id in json.load(f).keys():
 				print(user_id, updater.bot.get_chat(user_id).full_name)
 		return
@@ -272,16 +261,16 @@ def main():
 		format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 		level=logging.INFO)
 	logging.getLogger("telegram.vendor.ptb_urllib3.urllib3").setLevel(logging.ERROR)
-	logger = logging.getLogger(__name__)
 
 	try:
-		with open(daily_list_file) as f:
+		with open(paths['sub_list']) as f:
 			daily_ids = json.load(f)
 	except ValueError:
-		logger.warning(f"Unable to decode JSON in {daily_list_file}, sub list will be empty")
+		logger.error(f"Unable to decode JSON in {paths['sub_list']}, terminating")
+		return
 	except OSError:
-		logger.warning(f"File {daily_list_file} doesn't exist, creating")
-		open(daily_list_file, 'a').close()
+		logger.warning(f"File {paths['sub_list']} doesn't exist, creating")
+		open(paths['sub_list'], 'a').close()
 
 	dispatcher = updater.dispatcher
 
@@ -300,8 +289,7 @@ def main():
 	updater.start_polling(allowed_updates=Update.ALL_TYPES)
 	logger.info("Bot started")
 
-	# send daily card at 9:00 UTC = 12:00 MSK
-	updater.job_queue.run_daily(send_message, datetime.time(hour=9))
+	updater.job_queue.run_daily(send_message, datetime.time(hour=job_hour))
 
 	updater.idle()
 
