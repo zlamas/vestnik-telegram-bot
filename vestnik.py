@@ -3,41 +3,39 @@ import json
 import logging
 import random
 import datetime
-import argparse
 import configparser
+import warnings
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatMember, ChatMemberUpdated
-from telegram.ext import Updater, CallbackContext, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, Filters, Defaults
-from telegram.error import Unauthorized, NetworkError
-
-logger = logging.getLogger(__name__)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
+from telegram.ext import Application, Defaults, filters, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler
+from telegram.error import Forbidden # NetworkError
 
 
-def is_member(update: Update, context: CallbackContext):
+async def is_member(update, context):
 	user_id = update.effective_user.id
-	result = context.bot.get_chat_member(keys['channel'], user_id)
+	result = await context.bot.get_chat_member(keys['channel'], user_id)
 	return result.status in ['member', 'administrator']
 
 
-def start(update: Update, context: CallbackContext):
-	if is_member(update, context):
+async def start(update, context):
+	if await is_member(update, context):
 		with open(paths['welcome']) as f:
 			welcome_message = f.read().strip()
 
-		markup = get_start_ik(str(update.effective_user.id) in daily_ids)
-		update.effective_message.reply_text(welcome_message, reply_markup=markup)
+		markup = get_start_ik(update.effective_user.id in daily_ids)
+		await update.effective_message.reply_text(welcome_message, reply_markup=markup)
 	else:
 		stranger_reply(update)
 
 
-def stranger_reply(update: Update):
+async def stranger_reply(update):
 	with open(paths['stranger']) as f:
 		stranger_message = f.read().strip()
 
 	markup = InlineKeyboardMarkup([[
 		InlineKeyboardButton("Подписаться", f"https://t.me/{keys['invite']}")
 	]])
-	update.effective_message.reply_text(stranger_message, reply_markup=markup)
+	await update.effective_message.reply_text(stranger_message, reply_markup=markup)
 
 
 def get_start_ik(is_subscribed):
@@ -53,12 +51,12 @@ def get_start_ik(is_subscribed):
 	]])
 
 
-def button(update: Update, context: CallbackContext):
+async def button(update, context):
 	query = update.callback_query
 	query.answer()
 
 	if query.data == 'sub_daily':
-		if is_member(update, context):
+		if await is_member(update, context):
 			markup = get_start_ik(True)
 			query.edit_message_reply_markup(reply_markup=markup)
 			subscribe_daily(update)
@@ -70,7 +68,7 @@ def button(update: Update, context: CallbackContext):
 		unsubscribe_daily(update)
 
 
-def extract_status_change(chat_member_update: ChatMemberUpdated):
+def extract_status_change(chat_member_update):
 	"""Takes a ChatMemberUpdated instance and extracts whether the 'old_chat_member' was a member
 	of the chat and whether the 'new_chat_member' is a member of the chat. Returns None, if
 	the status didn't change.
@@ -96,7 +94,7 @@ def extract_status_change(chat_member_update: ChatMemberUpdated):
 	return was_member, is_member
 
 
-def track_channel_members(update: Update, context: CallbackContext):
+async def track_channel_members(update, context):
 	chat_member = update.chat_member
 	result = extract_status_change(chat_member)
 	if result is None:
@@ -109,40 +107,40 @@ def track_channel_members(update: Update, context: CallbackContext):
 		logger.info(f"{user.full_name} ({user.id}) joined the channel")
 	elif was_member and not is_member:
 		logger.info(f"{user.full_name} ({user.id}) left the channel")
-		if str(user.id) in daily_ids:
+		if user.id in daily_ids:
 			with open(paths['left_channel']) as f:
 				left_channel_message = f.read().strip()
 
-			context.bot.send_message(user.id, left_channel_message)
+			await context.bot.send_message(user.id, left_channel_message)
 			remove_user(user.id, user.full_name)
 
 
-def subscribe_daily(update: Update):
+async def subscribe_daily(update):
 	chat = update.effective_chat
 
-	if str(chat.id) in daily_ids:
+	if chat.id in daily_ids:
 		response = "Вы уже подписаны!"
 	else:
-		daily_ids[chat.id] = 0
+		daily_ids.append(chat.id)
 		save_daily_list()
 
 		logger.info(f"{chat.full_name} ({chat.id}) subscribed to bot")
 		response = "Подписка оформлена!"
 
-	update.effective_message.reply_text(response)
+	await update.effective_message.reply_text(response)
 
 
-def unsubscribe_daily(update: Update, left_channel=False):
+async def unsubscribe_daily(update, left_channel=False):
 	chat = update.effective_chat
 
-	if str(chat.id) in daily_ids:
+	if chat.id in daily_ids:
 		remove_user(chat.id)
 		logger.info(f"{chat.full_name} ({chat.id}) unsubscribed from bot")
 		response = "Вы отписались."
 	else:
 		response = "Вы не подписаны!"
 
-	update.effective_message.reply_text(response)
+	await update.effective_message.reply_text(response)
 
 
 def remove_user(user_id, user_name=None):
@@ -157,25 +155,12 @@ def save_daily_list():
 		json.dump(daily_ids, f)
 
 
-def send_message(context: CallbackContext):
+async def send_message(context):
 	for chat_id, days_left in daily_ids.items():
-		# if days_left == 0:
-			# send_reminder(context, chat_id)
-		# else:
-		send_daily_card(context, chat_id)
-			# daily_ids[chat_id] -= 1
-			# save_daily_list()
+		await send_daily_card(context, chat_id)
 
 
-def send_reminder(context: CallbackContext, chat_id):
-	try:
-		with open(paths['sub_message']) as f:
-			context.bot.send_message(chat_id, f.read().strip())
-	except Unauthorized:
-		remove_blocked_user(context, chat_id)
-
-
-def send_daily_card(context: CallbackContext, chat_id):
+async def send_daily_card(context, chat_id):
 	with open(paths['data']) as f:
 		data = json.load(f)
 
@@ -209,38 +194,49 @@ def send_daily_card(context: CallbackContext, chat_id):
 
 	try:
 		with open(image_path, 'rb') as img:
-			context.bot.send_photo(chat_id, img, caption)
-	except Unauthorized:
+			await context.bot.send_photo(chat_id, img, caption)
+	except Forbidden:
 		remove_blocked_user(context, chat_id)
 
 
-def send_test_card(update: Update, context: CallbackContext):
-	admin_id = next(iter(daily_ids))
-	if update.effective_user.id == int(admin_id):
-		send_daily_card(context, admin_id)
-
-
-def remove_blocked_user(context: CallbackContext, chat_id):
-	user_name = context.bot.get_chat(chat_id).full_name
+async def remove_blocked_user(context, chat_id):
+	user_name = await context.bot.get_chat(chat_id).full_name
 	logger.error(f"Failed to send message to {user_name} ({chat_id}): user blocked the bot")
 	remove_user(chat_id, user_name)
 
 
-def unknown(update: Update, _: CallbackContext):
-	update.message.reply_text("Такой команды ещё не придумали!")
+async def send_test_card(update, context):
+	await send_daily_card(context, daily_ids[0])
 
 
-def error_callback(_: Update, context: CallbackContext):
-	if not isinstance(context.error, NetworkError):
-		raise context.error
+async def list_subscriber_names(update, context):
+	message = ""
+	for user_id in daily_ids:
+		chat = await context.bot.get_chat(user_id)
+		message += f"{user_id} — <b>{chat.full_name}</b>"
+		if chat.username:
+			message += f" (@{chat.username})"
+		message += "\n"
+	await update.message.reply_text(message)
+
+
+async def unknown(update, _):
+	await update.message.reply_text("Такой команды ещё не придумали!")
+
+
+# async def error_callback(_, context):
+# 	if not isinstance(context.error, NetworkError):
+# 		raise context.error
 
 
 def main():
-	global daily_ids, keys, paths
+	global logger, daily_ids, keys, paths
 
-	arg_parser = argparse.ArgumentParser()
-	arg_parser.add_argument('-l', '--list', action='store_true', help='list subscribers')
-	args = arg_parser.parse_args()
+	logger = logging.getLogger(__name__)
+	logging.basicConfig(
+		format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+		level=logging.INFO)
+	logging.getLogger("telegram.vendor.ptb_urllib3.urllib3").setLevel(logging.ERROR)
 
 	config_file = 'vestnik.conf'
 	config = configparser.ConfigParser()
@@ -249,18 +245,8 @@ def main():
 	paths = config['paths']
 	job_hour = config.getint('time', 'hour')
 
-	updater = Updater(keys['token'], defaults=Defaults(parse_mode='HTML'))
-
-	if args.list:
-		with open(paths['sub_list']) as f:
-			for user_id in json.load(f).keys():
-				print(user_id, updater.bot.get_chat(user_id).full_name)
-		return
-
-	logging.basicConfig(
-		format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-		level=logging.INFO)
-	logging.getLogger("telegram.vendor.ptb_urllib3.urllib3").setLevel(logging.ERROR)
+	defaults = Defaults(parse_mode='HTML')
+	application = Application.builder().token(keys['token']).defaults(defaults).build()
 
 	try:
 		with open(paths['sub_list']) as f:
@@ -272,26 +258,27 @@ def main():
 		logger.warning(f"File {paths['sub_list']} doesn't exist, creating")
 		open(paths['sub_list'], 'a').close()
 
-	dispatcher = updater.dispatcher
+	admin_filter = filters.User(daily_ids[0])
 
-	dispatcher.add_handler(CommandHandler(['start', 'help'], start))
-	dispatcher.add_handler(CommandHandler('send_test_card', send_test_card))
+	# ignore the dumb warning about the `days` parameter for jobs
+	warnings.filterwarnings("ignore", "Prior to v20.0 the `days` parameter")
 
-	dispatcher.add_handler(CallbackQueryHandler(button))
+	application.add_handler(CommandHandler(['start', 'help'], start))
+	application.add_handler(CommandHandler('sendtestcard', send_test_card, admin_filter))
+	application.add_handler(CommandHandler('listsubnames', list_subscriber_names, admin_filter))
 
-	dispatcher.add_handler(ChatMemberHandler(track_channel_members, ChatMemberHandler.CHAT_MEMBER))
+	application.add_handler(CallbackQueryHandler(button))
 
-	dispatcher.add_handler(MessageHandler(Filters.chat_type.private & Filters.command, unknown))
-	dispatcher.add_handler(MessageHandler(Filters.chat_type.private & Filters.text, start))
+	application.add_handler(ChatMemberHandler(track_channel_members, ChatMemberHandler.CHAT_MEMBER))
 
-	dispatcher.add_error_handler(error_callback)
+	application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.COMMAND, unknown))
+	application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, start))
 
-	updater.start_polling(allowed_updates=Update.ALL_TYPES)
-	logger.info("Bot started")
+	# application.add_error_handler(error_callback)
 
-	updater.job_queue.run_daily(send_message, datetime.time(hour=job_hour))
+	application.job_queue.run_daily(send_message, datetime.time(hour=job_hour))
 
-	updater.idle()
+	application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == '__main__':
