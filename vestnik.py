@@ -8,7 +8,7 @@ import warnings
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import Application, Defaults, filters, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler
-from telegram.error import Forbidden # NetworkError
+from telegram.error import Forbidden, NetworkError
 
 
 async def is_member(update, context):
@@ -224,9 +224,9 @@ async def unknown(update, _):
 	await update.message.reply_text("Такой команды ещё не придумали!")
 
 
-# async def error_callback(_, context):
-# 	if not isinstance(context.error, NetworkError):
-# 		raise context.error
+async def error_callback(_, context):
+	if not isinstance(context.error, NetworkError):
+		raise context.error
 
 
 def main():
@@ -274,9 +274,9 @@ def main():
 	application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.COMMAND, unknown))
 	application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, start))
 
-	# application.add_error_handler(error_callback)
-
 	application.job_queue.run_daily(send_message, datetime.time(hour=job_hour))
+
+	application.add_error_handler(error_callback)
 
 	application.run_polling(allowed_updates=Update.ALL_TYPES)
 
