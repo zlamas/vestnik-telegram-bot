@@ -6,9 +6,9 @@ import datetime
 import configparser
 import warnings
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
-from telegram.ext import Application, Defaults, filters, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler
-from telegram.error import Forbidden, NetworkError
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember, LabeledPrice
+from telegram.ext import Application, Defaults, filters, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, PreCheckoutQueryHandler
+from telegram.error import Forbidden, Conflict, NetworkError
 
 
 async def is_member(update, context):
@@ -25,7 +25,7 @@ async def start(update, context):
 		markup = get_start_ik(update.effective_user.id in daily_ids)
 		await update.effective_message.reply_text(welcome_message, reply_markup=markup)
 	else:
-		stranger_reply(update)
+		await stranger_reply(update)
 
 
 async def stranger_reply(update):
@@ -53,19 +53,19 @@ def get_start_ik(is_subscribed):
 
 async def button(update, context):
 	query = update.callback_query
-	query.answer()
+	await query.answer()
 
 	if query.data == 'sub_daily':
 		if await is_member(update, context):
 			markup = get_start_ik(True)
-			query.edit_message_reply_markup(reply_markup=markup)
-			subscribe_daily(update)
+			await query.edit_message_reply_markup(reply_markup=markup)
+			await subscribe_daily(update)
 		else:
-			stranger_reply(update)
+			await stranger_reply(update)
 	elif query.data == 'unsub_daily':
 		markup = get_start_ik(False)
-		query.edit_message_reply_markup(reply_markup=markup)
-		unsubscribe_daily(update)
+		await query.edit_message_reply_markup(reply_markup=markup)
+		await unsubscribe_daily(update)
 
 
 def extract_status_change(chat_member_update):
@@ -156,7 +156,7 @@ def save_daily_list():
 
 
 async def send_message(context):
-	for chat_id, days_left in daily_ids.items():
+	for chat_id in daily_ids:
 		await send_daily_card(context, chat_id)
 
 
@@ -196,16 +196,16 @@ async def send_daily_card(context, chat_id):
 		with open(image_path, 'rb') as img:
 			await context.bot.send_photo(chat_id, img, caption)
 	except Forbidden:
-		remove_blocked_user(context, chat_id)
+		await remove_blocked_user(context, chat_id)
 
 
 async def remove_blocked_user(context, chat_id):
-	user_name = await context.bot.get_chat(chat_id).full_name
+	user_name = (await context.bot.get_chat(chat_id)).full_name
 	logger.error(f"Failed to send message to {user_name} ({chat_id}): user blocked the bot")
 	remove_user(chat_id, user_name)
 
 
-async def send_test_card(update, context):
+async def send_test_card(_, context):
 	await send_daily_card(context, daily_ids[0])
 
 
@@ -225,7 +225,9 @@ async def unknown(update, _):
 
 
 async def error_callback(_, context):
-	if not isinstance(context.error, NetworkError):
+	if isinstance(context.error, Conflict):
+		logger.error(context.error)
+	elif not isinstance(context.error, NetworkError):
 		raise context.error
 
 
@@ -236,7 +238,6 @@ def main():
 	logging.basicConfig(
 		format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 		level=logging.INFO)
-	logging.getLogger("telegram.vendor.ptb_urllib3.urllib3").setLevel(logging.ERROR)
 
 	config_file = 'vestnik.conf'
 	config = configparser.ConfigParser()
@@ -274,9 +275,9 @@ def main():
 	application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.COMMAND, unknown))
 	application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, start))
 
-	application.job_queue.run_daily(send_message, datetime.time(hour=job_hour))
-
 	application.add_error_handler(error_callback)
+
+	application.job_queue.run_daily(send_message, datetime.time(hour=job_hour))
 
 	application.run_polling(allowed_updates=Update.ALL_TYPES)
 
