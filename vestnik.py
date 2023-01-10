@@ -7,23 +7,33 @@ import configparser
 import warnings
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember, LabeledPrice
-from telegram.ext import Application, Defaults, filters, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, PreCheckoutQueryHandler
-from telegram.error import Forbidden, Conflict, NetworkError
+from telegram.ext import filters, Application, Defaults, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, ChatJoinRequestHandler, PreCheckoutQueryHandler
+from telegram.error import Conflict, NetworkError
+from telegram.constants import ChatMemberStatus
 
 
 async def is_member(update, context):
 	user_id = update.effective_user.id
-	result = await context.bot.get_chat_member(keys['channel'], user_id)
-	return result.status in ['member', 'administrator']
+	chat_member = await context.bot.get_chat_member(keys['channel'], user_id)
+	return chat_member.status in [
+		ChatMember.MEMBER,
+		ChatMember.OWNER,
+		ChatMember.ADMINISTRATOR
+	]
 
 
 async def start(update, context):
 	if await is_member(update, context):
-		with open(paths['welcome']) as f:
-			welcome_message = f.read().strip()
+		if update.effective_user.id in daily_ids:
+			markup = None
+		else:
+			markup = start_inline_keyboard()
 
-		markup = get_start_ik(update.effective_user.id in daily_ids)
-		await update.effective_message.reply_text(welcome_message, reply_markup=markup)
+		animation_path = f"{paths['images']}/promo.mp4"
+
+		with open(paths['welcome']) as f1, open(paths['info']) as f2:
+			await update.effective_user.send_animation(animation_path, caption=f1.read().strip(), reply_markup=markup)
+			await update.effective_user.send_message(f2.read().strip())
 	else:
 		await stranger_reply(update)
 
@@ -38,43 +48,27 @@ async def stranger_reply(update):
 	await update.effective_message.reply_text(stranger_message, reply_markup=markup)
 
 
-def get_start_ik(is_subscribed):
-	if is_subscribed:
-		sub_button_text = "Отписаться"
-		action = 'unsub_daily'
-	else:
-		sub_button_text = "Подписаться"
-		action = 'sub_daily'
-
+def start_inline_keyboard():
 	return InlineKeyboardMarkup([[
-		InlineKeyboardButton(sub_button_text, callback_data=action)
+		InlineKeyboardButton("Подписаться", callback_data='sub_daily')
 	]])
 
 
-async def button(update, context):
+async def button_handler(update, context):
 	query = update.callback_query
 	await query.answer()
 
 	if query.data == 'sub_daily':
 		if await is_member(update, context):
-			markup = get_start_ik(True)
-			await query.edit_message_reply_markup(reply_markup=markup)
+			markup = start_inline_keyboard()
+			# await query.edit_message_reply_markup(reply_markup=markup)
 			await subscribe_daily(update)
 		else:
 			await stranger_reply(update)
-	elif query.data == 'unsub_daily':
-		markup = get_start_ik(False)
-		await query.edit_message_reply_markup(reply_markup=markup)
-		await unsubscribe_daily(update)
 
 
 def extract_status_change(chat_member_update):
-	"""Takes a ChatMemberUpdated instance and extracts whether the 'old_chat_member' was a member
-	of the chat and whether the 'new_chat_member' is a member of the chat. Returns None, if
-	the status didn't change.
-	"""
 	status_change = chat_member_update.difference().get('status')
-	old_is_member, new_is_member = chat_member_update.difference().get('is_member', (None, None))
 
 	if status_change is None:
 		return None
@@ -83,13 +77,13 @@ def extract_status_change(chat_member_update):
 	was_member = old_status in [
 		ChatMember.MEMBER,
 		ChatMember.OWNER,
-		ChatMember.ADMINISTRATOR,
-	] or (old_status == ChatMember.RESTRICTED and old_is_member is True)
+		ChatMember.ADMINISTRATOR
+	]
 	is_member = new_status in [
 		ChatMember.MEMBER,
 		ChatMember.OWNER,
-		ChatMember.ADMINISTRATOR,
-	] or (new_status == ChatMember.RESTRICTED and new_is_member is True)
+		ChatMember.ADMINISTRATOR
+	]
 
 	return was_member, is_member
 
@@ -115,39 +109,49 @@ async def track_channel_members(update, context):
 			remove_user(user.id, user.full_name)
 
 
-async def subscribe_daily(update):
-	chat = update.effective_chat
+async def blocked_handler(update, context):
+	bot = update.my_chat_member.new_chat_member
+	if bot.status == ChatMemberStatus.BANNED:
+		user = update.effective_user
+		logger.info(f"{user.full_name} ({user.id}) blocked the bot")
+		if user.id in daily_ids:
+			remove_user(user.id, user.full_name)
 
-	if chat.id in daily_ids:
+
+async def request_greet(update, context):
+	join_request = update.chat_join_request
+	user = join_request.from_user
+
+	logger.info(f"{user.full_name} ({user.id}) sent a join request")
+	await join_request.approve()
+	daily_ids.append(user.id)
+	save_daily_list()
+
+	animation_path = f"{paths['images']}/promo.mp4"
+
+	with open(paths['welcome']) as f1, open(paths['info']) as f2:
+		await user.send_animation(animation_path, caption=f1.read().strip(), reply_markup=markup)
+		await user.send_message(f2.read().strip())
+
+
+async def subscribe_daily(update):
+	user = update.effective_user
+
+	if user.id in daily_ids:
 		response = "Вы уже подписаны!"
 	else:
-		daily_ids.append(chat.id)
+		logger.info(f"{user.full_name} ({user.id}) subscribed to bot")
+		response = "Подписка оформлена!"
+		daily_ids.append(user.id)
 		save_daily_list()
 
-		logger.info(f"{chat.full_name} ({chat.id}) subscribed to bot")
-		response = "Подписка оформлена!"
-
 	await update.effective_message.reply_text(response)
 
 
-async def unsubscribe_daily(update, left_channel=False):
-	chat = update.effective_chat
-
-	if chat.id in daily_ids:
-		remove_user(chat.id)
-		logger.info(f"{chat.full_name} ({chat.id}) unsubscribed from bot")
-		response = "Вы отписались."
-	else:
-		response = "Вы не подписаны!"
-
-	await update.effective_message.reply_text(response)
-
-
-def remove_user(user_id, user_name=None):
+def remove_user(user_id, user_name):
 	daily_ids.remove(user_id)
 	save_daily_list()
-	if user_name is not None:
-		logger.info(f"Removing user {user_name} ({user_id}) from messaging list")
+	logger.info(f"Removing user {user_name} ({user_id}) from messaging list")
 
 
 def save_daily_list():
@@ -155,7 +159,7 @@ def save_daily_list():
 		json.dump(daily_ids, f)
 
 
-async def send_message(context):
+async def send_daily_message(context):
 	for chat_id in daily_ids:
 		await send_daily_card(context, chat_id)
 
@@ -167,7 +171,7 @@ async def send_daily_card(context, chat_id):
 	card_id = random.randrange(78)
 	decks = list(data['decks'].items())
 	deck_id, deck_name = random.choice(decks)
-	image_path = f"{paths['image_dir']}/{deck_id}/{card_id}.jpg"
+	card_path = f"{paths['cards']}/{deck_id}/{card_id}.jpg"
 
 	if card_id > 21:
 		rank = (card_id - 22) % 14
@@ -191,31 +195,20 @@ async def send_daily_card(context, chat_id):
 
 	with open(paths['card_caption']) as f:
 		caption = f.read().strip().format(name, deck_name, meanings[card_id])
-
-	try:
-		with open(image_path, 'rb') as img:
-			await context.bot.send_photo(chat_id, img, caption)
-	except Forbidden:
-		await remove_blocked_user(context, chat_id)
-
-
-async def remove_blocked_user(context, chat_id):
-	user_name = (await context.bot.get_chat(chat_id)).full_name
-	logger.error(f"Failed to send message to {user_name} ({chat_id}): user blocked the bot")
-	remove_user(chat_id, user_name)
+		await context.bot.send_photo(chat_id, card_path, caption)
 
 
 async def send_test_card(_, context):
-	await send_daily_card(context, daily_ids[0])
+	await send_daily_card(context, admin_id)
 
 
 async def list_subscriber_names(update, context):
 	message = ""
 	for user_id in daily_ids:
-		chat = await context.bot.get_chat(user_id)
-		message += f"{user_id} — <b>{chat.full_name}</b>"
-		if chat.username:
-			message += f" (@{chat.username})"
+		user = await context.bot.get_chat(user_id)
+		message += f"{user_id} — <b>{user.full_name}</b>"
+		if user.username:
+			message += f" (@{user.username})"
 		message += "\n"
 	await update.message.reply_text(message)
 
@@ -232,7 +225,7 @@ async def error_callback(_, context):
 
 
 def main():
-	global logger, daily_ids, keys, paths
+	global logger, admin_id, daily_ids, keys, paths
 
 	logger = logging.getLogger(__name__)
 	logging.basicConfig(
@@ -245,6 +238,7 @@ def main():
 	keys = config['keys']
 	paths = config['paths']
 	job_hour = config.getint('time', 'hour')
+	admin_id = int(keys['admin'])
 
 	defaults = Defaults(parse_mode='HTML')
 	application = Application.builder().token(keys['token']).defaults(defaults).build()
@@ -259,25 +253,27 @@ def main():
 		logger.warning(f"File {paths['sub_list']} doesn't exist, creating")
 		open(paths['sub_list'], 'a').close()
 
-	admin_filter = filters.User(daily_ids[0])
+	admin_filter = filters.User(admin_id)
 
 	# ignore the dumb warning about the `days` parameter for jobs
-	warnings.filterwarnings("ignore", "Prior to v20.0 the `days` parameter")
+	warnings.filterwarnings('ignore', "Prior to v20.0 the `days` parameter")
 
 	application.add_handler(CommandHandler(['start', 'help'], start))
 	application.add_handler(CommandHandler('sendtestcard', send_test_card, admin_filter))
 	application.add_handler(CommandHandler('listsubnames', list_subscriber_names, admin_filter))
 
-	application.add_handler(CallbackQueryHandler(button))
+	application.add_handler(CallbackQueryHandler(button_handler))
 
 	application.add_handler(ChatMemberHandler(track_channel_members, ChatMemberHandler.CHAT_MEMBER))
+	application.add_handler(ChatMemberHandler(blocked_handler, ChatMemberHandler.MY_CHAT_MEMBER))
+	application.add_handler(ChatJoinRequestHandler(request_greet))
 
 	application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.COMMAND, unknown))
 	application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, start))
 
 	application.add_error_handler(error_callback)
 
-	application.job_queue.run_daily(send_message, datetime.time(hour=job_hour))
+	application.job_queue.run_daily(send_daily_message, datetime.time(hour=job_hour))
 
 	application.run_polling(allowed_updates=Update.ALL_TYPES)
 
