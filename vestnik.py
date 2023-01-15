@@ -130,7 +130,7 @@ async def request_greet(update, context):
 	animation_path = f"{paths['images']}/promo.mp4"
 
 	with open(paths['welcome']) as f1, open(paths['info']) as f2:
-		await user.send_animation(animation_path, caption=f1.read().strip(), reply_markup=markup)
+		await user.send_animation(animation_path, caption=f1.read().strip())
 		await user.send_message(f2.read().strip())
 
 
