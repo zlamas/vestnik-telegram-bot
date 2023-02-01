@@ -84,14 +84,14 @@ async def is_channel_member(update, context):
 
 
 async def stranger_reply(update):
-	markup = InlineKeyboardMarkup([[
-		InlineKeyboardButton("Подписаться", f"https://t.me/{KEYS['invite']}")
-	]])
+	# markup = InlineKeyboardMarkup([[
+	# 	InlineKeyboardButton("Подписаться", f"https://t.me/{KEYS['invite']}")
+	# ]])
 
 	with open(PATHS['stranger']) as f:
 		message = f.read().strip()
 
-	await update.effective_message.reply_text(message, reply_markup=markup)
+	await update.effective_user.send_message(message)
 
 
 async def subscribe_daily(update):
@@ -146,14 +146,18 @@ async def send_daily_card(context, chat_id):
 
 
 async def start(update, context):
-	if not (update.chat_join_request
-	or await is_channel_member(update, context)):
+	if not await is_channel_member(update, context):
 		await stranger_reply(update)
 		return
 
+	if update.chat_member:
+		user = update.chat_member.new_chat_member.user
+	else:
+		user = update.effective_user
+
 	markup = (InlineKeyboardMarkup([[
 		InlineKeyboardButton("Подписаться", callback_data='sub_daily')
-	]]) if update.effective_user.id in daily_list else None)
+	]]) if user.id not in daily_list else None)
 
 	animation_path = f"{PATHS['images']}/promo.mp4"
 
@@ -162,11 +166,11 @@ async def start(update, context):
 	with open(PATHS['info']) as f:
 		info_message = f.read().strip()
 
-	await update.effective_user.send_animation(
+	await user.send_animation(
 		animation_path,
 		caption=welcome_message,
 		reply_markup=markup)
-	await update.effective_user.send_message(info_message)
+	await user.send_message(info_message)
 
 
 async def button_handler(update, context):
@@ -191,6 +195,8 @@ async def track_channel_members(update, context):
 
 	if not was_member and is_member:
 		logger.info("%s (%s) joined the channel", user.full_name, user.id)
+		add_user(user.id, user.full_name)
+		await start(update, context)
 	elif was_member and not is_member:
 		logger.info("%s (%s) left the channel", user.full_name, user.id)
 		if user.id in daily_list:
@@ -212,14 +218,9 @@ async def blocked_handler(update, _):
 
 
 async def request_greet(update, context):
-	join_request = update.chat_join_request
-	user = join_request.from_user
-
+	user = update.effective_user
 	logger.info("%s (%s) sent a join request", user.full_name, user.id)
-	await join_request.approve()
-	add_user(user.id, user.full_name)
-
-	await start(update, context)
+	await stranger_reply(update)
 
 
 async def unknown_command_handler(update, _):
@@ -261,9 +262,24 @@ def main():
 		level=logging.INFO)
 
 	config = configparser.ConfigParser()
-	config.read('vestnik.conf')
+	config_file = 'vestnik.conf'
+
+	if not config.read(config_file):
+		logger.error("Config file %s doesn't exist, terminating", config_file)
+		return
+
 	KEYS = config['keys']
 	PATHS = config['paths']
+
+	try:
+		with open(PATHS['sub_list']) as f:
+			daily_list = json.load(f)
+	except ValueError:
+		logger.error("Failed to parse JSON file %s, terminating", PATHS['sub_list'])
+		return
+	except OSError:
+		logger.warning("File %s doesn't exist, creating", PATHS['sub_list'])
+		open(PATHS['sub_list'], 'a').close()
 
 	defaults = Defaults(parse_mode='HTML')
 	application = (Application
@@ -271,16 +287,6 @@ def main():
 			.token(KEYS['token'])
 			.defaults(defaults)
 			.build())
-
-	try:
-		with open(PATHS['sub_list']) as f:
-			daily_list = json.load(f)
-	except ValueError:
-		logger.error("Unable to decode JSON in %s, terminating", PATHS['sub_list'])
-		return
-	except OSError:
-		logger.warning("File %s doesn't exist, creating", PATHS['sub_list'])
-		open(PATHS['sub_list'], 'a').close()
 
 	admin_id = int(KEYS['admin'])
 	admin_filter = filters.User(admin_id)
