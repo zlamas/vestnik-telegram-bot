@@ -107,7 +107,7 @@ async def subscribe_daily(update):
 	await update.effective_message.reply_text(response)
 
 
-async def send_daily_card(context, chat_id):
+async def send_daily_card(context, user_id):
 	with open(PATHS['data']) as f:
 		data = json.load(f)
 
@@ -140,9 +140,9 @@ async def send_daily_card(context, chat_id):
 		caption = f.read().strip().format(name, deck_name, meanings[card_id])
 
 	try:
-		await context.bot.send_photo(chat_id, card_path, caption)
+		await context.bot.send_photo(user_id, card_path, caption)
 	except Forbidden:
-		remove_blocked_user(await context.bot.get_chat(chat_id))
+		remove_blocked_user(await context.bot.get_chat(user_id))
 
 
 async def start(update, context):
@@ -228,8 +228,8 @@ async def unknown_command_handler(update, _):
 
 
 async def send_daily_message(context):
-	for chat_id in daily_list:
-		await send_daily_card(context, chat_id)
+	for user_id in daily_list:
+		await send_daily_card(context, user_id)
 
 
 async def send_test_card(update, context):
