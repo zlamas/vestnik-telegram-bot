@@ -22,11 +22,20 @@ from telegram.ext import (
 	Defaults,
 	MessageHandler
 )
-from telegram.error import Conflict, Forbidden, NetworkError
-from telegram.constants import ChatMemberStatus
+from telegram.error import (
+	Conflict,
+	Forbidden,
+	NetworkError
+)
 
 logger = logging.getLogger(__name__)
 daily_list = []
+
+MEMBER_STATUSES = [
+	ChatMember.MEMBER,
+	ChatMember.OWNER,
+	ChatMember.ADMINISTRATOR
+]
 
 
 def save_daily_list():
@@ -34,22 +43,22 @@ def save_daily_list():
 		json.dump(daily_list, f)
 
 
-def add_user(user_id, user_name):
-	daily_list.append(user_id)
+def add_user(user):
+	daily_list.append(user.id)
 	save_daily_list()
-	logger.info("Adding user %s (%s) to messaging list", user_name, user_id)
+	logger.info("Adding user %s (%s) to messaging list", user.full_name, user.id)
 
 
-def remove_user(user_id, user_name):
-	daily_list.remove(user_id)
+def remove_user(user):
+	daily_list.remove(user.id)
 	save_daily_list()
-	logger.info("Removing user %s (%s) from messaging list", user_name, user_id)
+	logger.info("Removing user %s (%s) from messaging list", user.full_name, user.id)
 
 
-def remove_blocked_user(chat):
-	logger.info("%s (%s) blocked the bot", chat.full_name, chat.id)
-	if chat.id in daily_list:
-		remove_user(chat.id, chat.full_name)
+def remove_blocked_user(user):
+	logger.info("%s (%s) blocked the bot", user.full_name, user.id)
+	if user.id in daily_list:
+		remove_user(user)
 
 
 def extract_status_change(chat_member_update):
@@ -59,35 +68,18 @@ def extract_status_change(chat_member_update):
 		return None
 
 	old_status, new_status = status_change
-	was_member = old_status in [
-		ChatMember.MEMBER,
-		ChatMember.OWNER,
-		ChatMember.ADMINISTRATOR
-	]
-	is_member = new_status in [
-		ChatMember.MEMBER,
-		ChatMember.OWNER,
-		ChatMember.ADMINISTRATOR
-	]
-
+	was_member = old_status in MEMBER_STATUSES
+	is_member = new_status in MEMBER_STATUSES
 	return was_member, is_member
 
 
 async def is_channel_member(update, context):
 	user_id = update.effective_user.id
 	member = await context.bot.get_chat_member(KEYS['channel'], user_id)
-	return member.status in [
-		ChatMember.MEMBER,
-		ChatMember.OWNER,
-		ChatMember.ADMINISTRATOR
-	]
+	return member.status in MEMBER_STATUSES
 
 
 async def stranger_reply(update):
-	# markup = InlineKeyboardMarkup([[
-	# 	InlineKeyboardButton("Подписаться", f"https://t.me/{KEYS['invite']}")
-	# ]])
-
 	with open(PATHS['stranger']) as f:
 		message = f.read().strip()
 
@@ -212,11 +204,11 @@ async def track_channel_members(update, context):
 
 async def blocked_handler(update, _):
 	bot = update.my_chat_member.new_chat_member
-	if bot.status == ChatMemberStatus.BANNED:
+	if bot.status == ChatMember.BANNED:
 		remove_blocked_user(update.effective_chat)
 
 
-async def request_greet(update, context):
+async def request_greet(update, _):
 	user = update.effective_user
 	logger.info("%s (%s) sent a join request", user.full_name, user.id)
 	await stranger_reply(update)
