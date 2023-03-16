@@ -200,15 +200,14 @@ async def track_channel_members(update, context):
 	elif was_member and not is_member:
 		logger.info("%s (%s) left the channel", user.full_name, user.id)
 		if user.id in daily_list:
-			with open(PATHS['left_channel']) as f:
-				message = f.read().strip()
-
-			try:
-				await context.bot.send_message(user.id, message)
-			except Forbidden:
-				pass
-
 			remove_user(user.id, user.full_name)
+
+		with open(PATHS['left_channel']) as f:
+			message = f.read().strip()
+		try:
+			await context.bot.send_message(user.id, message)
+		except Forbidden:
+			pass
 
 
 async def blocked_handler(update, _):
