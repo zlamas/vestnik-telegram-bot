@@ -269,6 +269,7 @@ def main():
 
 	KEYS = config['keys']
 	PATHS = config['paths']
+	job_time = {k: int(v) for k, v in config.items('time')}
 
 	try:
 		with open(PATHS['sub_list']) as f:
@@ -325,7 +326,7 @@ def main():
 
 	application.job_queue.run_daily(
 		send_daily_message,
-		datetime.time(hour=config.getint('time', 'hour')))
+		datetime.time(**job_time))
 
 	application.run_polling(allowed_updates=Update.ALL_TYPES)
 
