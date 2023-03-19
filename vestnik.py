@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
+import configparser
+import datetime
 import json
 import logging
 import random
-import datetime
-import configparser
 import warnings
 
 from telegram import (
@@ -13,13 +13,13 @@ from telegram import (
 	Update
 )
 from telegram.ext import (
-	filters,
 	Application,
 	CallbackQueryHandler,
 	ChatJoinRequestHandler,
 	ChatMemberHandler,
 	CommandHandler,
 	Defaults,
+	filters,
 	MessageHandler
 )
 from telegram.error import (
@@ -27,9 +27,6 @@ from telegram.error import (
 	Forbidden,
 	NetworkError
 )
-
-logger = logging.getLogger(__name__)
-daily_list = []
 
 MEMBER_STATUSES = [
 	ChatMember.MEMBER,
@@ -151,18 +148,13 @@ async def start(update, context):
 		InlineKeyboardButton("Подписаться", callback_data='sub_daily')
 	]]) if user.id not in daily_list else None)
 
-	animation_path = f"{PATHS['images']}/promo.mp4"
-
 	with open(PATHS['welcome']) as f:
 		welcome_message = f.read().strip()
-	with open(PATHS['info']) as f:
-		info_message = f.read().strip()
 
-	await user.send_animation(
-		animation_path,
+	await user.send_photo(
+		PATHS['welcome_image'],
 		caption=welcome_message,
 		reply_markup=markup)
-	await user.send_message(info_message)
 
 
 async def button_handler(update, context):
@@ -246,11 +238,12 @@ async def error_callback(_, context):
 
 
 def main():
-	global KEYS, PATHS, daily_list
+	global KEYS, PATHS, daily_list, logger
 
 	logging.basicConfig(
 		format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 		level=logging.INFO)
+	logger = logging.getLogger(__name__)
 
 	config = configparser.ConfigParser()
 	config_file = 'vestnik.conf'
@@ -272,13 +265,14 @@ def main():
 	except OSError:
 		logger.warning("File %s doesn't exist, creating", PATHS['sub_list'])
 		open(PATHS['sub_list'], 'a').close()
+		daily_list = []
 
 	defaults = Defaults(parse_mode='HTML')
 	application = (Application
-			.builder()
-			.token(KEYS['token'])
-			.defaults(defaults)
-			.build())
+		.builder()
+		.token(KEYS['token'])
+		.defaults(defaults)
+		.build())
 
 	admin_id = int(KEYS['admin'])
 	admin_filter = filters.User(admin_id)
