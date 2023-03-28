@@ -4,7 +4,6 @@ import datetime
 import json
 import logging
 import random
-import warnings
 
 from telegram import (
 	ChatMember,
@@ -33,10 +32,26 @@ MEMBER_STATUSES = [
 	ChatMember.OWNER,
 	ChatMember.ADMINISTRATOR
 ]
+daily_list = []
+
+logging.basicConfig(
+	format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+	level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+config = configparser.ConfigParser()
+config.read('vestnik.conf')
+
+
+def load_daily_list():
+	global daily_list
+	with open(config.get('paths', 'sub_list')) as f:
+		daily_list = json.load(f)
 
 
 def save_daily_list():
-	with open(PATHS['sub_list'], 'w') as f:
+	with open(config.get('paths', 'sub_list'), 'w') as f:
 		json.dump(daily_list, f)
 
 
@@ -72,12 +87,12 @@ def extract_status_change(chat_member_update):
 
 async def is_channel_member(update, context):
 	user_id = update.effective_user.id
-	member = await context.bot.get_chat_member(KEYS['channel'], user_id)
+	member = await context.bot.get_chat_member(config.get('keys', 'channel'), user_id)
 	return member.status in MEMBER_STATUSES
 
 
 async def stranger_reply(update):
-	with open(PATHS['stranger']) as f:
+	with open(config.get('paths', 'stranger')) as f:
 		message = f.read().strip()
 
 	await update.effective_user.send_message(message)
@@ -97,13 +112,13 @@ async def subscribe_daily(update):
 
 
 async def send_daily_card(context, user_id):
-	with open(PATHS['data']) as f:
+	with open(config.get('paths', 'data')) as f:
 		data = json.load(f)
 
 	card_id = random.randrange(78)
 	decks = list(data['decks'].items())
 	deck_id, deck_name = random.choice(decks)
-	card_path = f"{PATHS['cards']}/{deck_id}/{card_id}.jpg"
+	card_path = f"{config.get('paths', 'cards')}/{deck_id}/{card_id}.jpg"
 
 	if card_id > 21:
 		rank = (card_id - 22) % 14
@@ -112,20 +127,24 @@ async def send_daily_card(context, user_id):
 		ranks = data['ranks']
 		if deck_id in data['altRanks']:
 			ranks[10:] = data['altRanks'][deck_id]
-		suits = (data['altSuits'][deck_id]
+		suits = (
+			data['altSuits'][deck_id]
 			if deck_id in data['altSuits']
-			else data['suits'])
+			else data['suits']
+		)
 
 		name = f"{ranks[rank]} {suits[suit]}"
 	else:
 		name = f"{data['roman'][card_id]} {data['major'][card_id]}"
 
 	meanings = data['meanings']
-	meanings = (meanings[deck_id]
+	meanings = (
+		meanings[deck_id]
 		if deck_id in meanings
-		else meanings['normal'])
+		else meanings['normal']
+	)
 
-	with open(PATHS['card_caption']) as f:
+	with open(config.get('paths', 'card_caption')) as f:
 		caption = f.read().strip().format(name, deck_name, meanings[card_id])
 
 	try:
@@ -144,17 +163,18 @@ async def start(update, context):
 	else:
 		user = update.effective_user
 
-	markup = (InlineKeyboardMarkup([[
+	markup = InlineKeyboardMarkup([[
 		InlineKeyboardButton("Подписаться", callback_data='sub_daily')
-	]]) if user.id not in daily_list else None)
+	]]) if user.id not in daily_list else None
 
-	with open(PATHS['welcome']) as f:
+	with open(config.get('paths', 'welcome')) as f:
 		welcome_message = f.read().strip()
 
 	await user.send_photo(
-		PATHS['welcome_image'],
+		config.get('paths', 'welcome_image'),
 		caption=welcome_message,
-		reply_markup=markup)
+		reply_markup=markup
+	)
 
 
 async def button_handler(update, context):
@@ -186,7 +206,7 @@ async def track_channel_members(update, context):
 		if user.id in daily_list:
 			remove_user(user.id, user.full_name)
 
-		with open(PATHS['left_channel']) as f:
+		with open(config.get('paths', 'left_channel')) as f:
 			message = f.read().strip()
 		try:
 			await context.bot.send_message(user.id, message)
@@ -220,7 +240,7 @@ async def send_test_card(update, context):
 
 
 async def list_subscriber_names(update, context):
-	message = ""
+	message = "<b>Список подписчиков:</b>\n"
 	for user_id in daily_list:
 		user = await context.bot.get_chat(user_id)
 		message += f"{user_id} — <b>{user.full_name}</b>"
@@ -231,88 +251,70 @@ async def list_subscriber_names(update, context):
 
 
 async def error_callback(_, context):
-	if isinstance(context.error, Conflict):
+	if not isinstance(context.error, (Conflict, NetworkError)):
 		logger.error(context.error)
-	elif not isinstance(context.error, NetworkError):
-		raise context.error
 
 
 def main():
-	global KEYS, PATHS, daily_list, logger
+	try:
+		load_daily_list()
+	except FileNotFoundError as e:
+		logger.warning(
+			"File '%s' doesn't exist, continuing with empty subscriber list",
+			e.filename
+		)
 
-	logging.basicConfig(
-		format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-		level=logging.INFO)
-	logger = logging.getLogger(__name__)
-
-	config = configparser.ConfigParser()
-	config_file = 'vestnik.conf'
-
-	if not config.read(config_file):
-		logger.error("Config file %s doesn't exist, terminating", config_file)
-		return
-
-	KEYS = config['keys']
-	PATHS = config['paths']
+	admin_id = config.getint('keys', 'admin')
+	admin_filter = filters.User(admin_id)
 	job_time = {k: int(v) for k, v in config.items('time')}
 
-	try:
-		with open(PATHS['sub_list']) as f:
-			daily_list = json.load(f)
-	except ValueError:
-		logger.error("Failed to parse JSON file %s, terminating", PATHS['sub_list'])
-		return
-	except OSError:
-		logger.warning("File %s doesn't exist, creating", PATHS['sub_list'])
-		open(PATHS['sub_list'], 'a').close()
-		daily_list = []
-
-	defaults = Defaults(parse_mode='HTML')
-	application = (Application
-		.builder()
-		.token(KEYS['token'])
-		.defaults(defaults)
-		.build())
-
-	admin_id = int(KEYS['admin'])
-	admin_filter = filters.User(admin_id)
-
-	# ignore the dumb warning about the `days` parameter for jobs
-	warnings.filterwarnings('ignore', "Prior to v20.0 the `days` parameter")
+	application = (
+		Application.builder()
+		.token(config.get('keys', 'token'))
+		.defaults(Defaults(parse_mode='HTML'))
+		.build()
+	)
 
 	application.add_handler(CommandHandler(['start', 'help'], start))
 	application.add_handler(CommandHandler(
 		'sendtestcard',
 		send_test_card,
-		admin_filter))
+		admin_filter
+	))
 	application.add_handler(CommandHandler(
 		'listsubnames',
 		list_subscriber_names,
-		admin_filter))
+		admin_filter
+	))
 
 	application.add_handler(CallbackQueryHandler(button_handler))
 
 	application.add_handler(ChatMemberHandler(
 		track_channel_members,
-		ChatMemberHandler.CHAT_MEMBER))
+		ChatMemberHandler.CHAT_MEMBER
+	))
 	application.add_handler(ChatMemberHandler(
 		blocked_handler,
-		ChatMemberHandler.MY_CHAT_MEMBER))
+		ChatMemberHandler.MY_CHAT_MEMBER
+	))
 
 	application.add_handler(ChatJoinRequestHandler(request_greet))
 
 	application.add_handler(MessageHandler(
 		filters.ChatType.PRIVATE & filters.COMMAND,
-		unknown_command_handler))
+		unknown_command_handler
+	))
 	application.add_handler(MessageHandler(
 		filters.ChatType.PRIVATE & filters.TEXT,
-		start))
+		start
+	))
 
 	application.add_error_handler(error_callback)
 
 	application.job_queue.run_daily(
 		send_daily_message,
-		datetime.time(**job_time))
+		datetime.time(**job_time)
+	)
 
 	application.run_polling(allowed_updates=Update.ALL_TYPES)
 
