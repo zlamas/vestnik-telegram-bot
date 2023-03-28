@@ -62,6 +62,9 @@ def add_user(user):
 
 
 def remove_user(user):
+	if user.id not in daily_list:
+		return
+
 	daily_list.remove(user.id)
 	save_daily_list()
 	logger.info("Removing user %s (%s) from messaging list", user.full_name, user.id)
@@ -69,8 +72,7 @@ def remove_user(user):
 
 def remove_blocked_user(user):
 	logger.info("%s (%s) blocked the bot", user.full_name, user.id)
-	if user.id in daily_list:
-		remove_user(user)
+	remove_user(user)
 
 
 def extract_status_change(chat_member_update):
@@ -93,7 +95,7 @@ async def is_channel_member(update, context):
 
 async def stranger_reply(update):
 	with open(config.get('paths', 'stranger')) as f:
-		message = f.read().strip()
+		message = f.read()
 
 	await update.effective_user.send_message(message)
 
@@ -105,7 +107,7 @@ async def subscribe_daily(update):
 		response = "Вы уже подписаны!"
 	else:
 		logger.info("%s (%s) subscribed to bot", user.full_name, user.id)
-		add_user(user.id, user.full_name)
+		add_user(user)
 		response = "Подписка оформлена!"
 
 	await update.effective_message.reply_text(response)
@@ -115,40 +117,33 @@ async def send_daily_card(context, user_id):
 	with open(config.get('paths', 'data')) as f:
 		data = json.load(f)
 
+	with open(config.get('paths', 'card_caption')) as f:
+		caption = f.read()
+
 	card_id = random.randrange(78)
 	decks = list(data['decks'].items())
 	deck_id, deck_name = random.choice(decks)
-	card_path = f"{config.get('paths', 'cards')}/{deck_id}/{card_id}.jpg"
+	meanings = data['meanings'].get(deck_id) or data['meanings']['normal']
 
 	if card_id > 21:
 		rank = (card_id - 22) % 14
 		suit = (card_id - 22) // 14
 
-		ranks = data['ranks']
+		rank_names = data['ranks']
 		if deck_id in data['altRanks']:
-			ranks[10:] = data['altRanks'][deck_id]
-		suits = (
-			data['altSuits'][deck_id]
-			if deck_id in data['altSuits']
-			else data['suits']
-		)
+			rank_names[10:] = data['altRanks'][deck_id]
+		suit_names = data['altSuits'].get(deck_id) or data['suits']
 
-		name = f"{ranks[rank]} {suits[suit]}"
+		card_name = f"{rank_names[rank]} {suit_names[suit]}"
 	else:
-		name = f"{data['roman'][card_id]} {data['major'][card_id]}"
-
-	meanings = data['meanings']
-	meanings = (
-		meanings[deck_id]
-		if deck_id in meanings
-		else meanings['normal']
-	)
-
-	with open(config.get('paths', 'card_caption')) as f:
-		caption = f.read().strip().format(name, deck_name, meanings[card_id])
+		card_name = f"{data['roman'][card_id]} {data['major'][card_id]}"
 
 	try:
-		await context.bot.send_photo(user_id, card_path, caption)
+		await context.bot.send_photo(
+			user_id,
+			f"{config.get('paths', 'cards')}/{deck_id}/{card_id}.jpg",
+			caption.format(card_name, deck_name, meanings[card_id])
+		)
 	except Forbidden:
 		remove_blocked_user(await context.bot.get_chat(user_id))
 
@@ -168,11 +163,11 @@ async def start(update, context):
 	]]) if user.id not in daily_list else None
 
 	with open(config.get('paths', 'welcome')) as f:
-		welcome_message = f.read().strip()
+		welcome_message = f.read()
 
 	await user.send_photo(
 		config.get('paths', 'welcome_image'),
-		caption=welcome_message,
+		welcome_message,
 		reply_markup=markup
 	)
 
@@ -199,15 +194,15 @@ async def track_channel_members(update, context):
 
 	if not was_member and is_member:
 		logger.info("%s (%s) joined the channel", user.full_name, user.id)
-		add_user(user.id, user.full_name)
+		add_user(user)
 		await start(update, context)
 	elif was_member and not is_member:
 		logger.info("%s (%s) left the channel", user.full_name, user.id)
-		if user.id in daily_list:
-			remove_user(user.id, user.full_name)
+		remove_user(user)
 
 		with open(config.get('paths', 'left_channel')) as f:
-			message = f.read().strip()
+			message = f.read()
+
 		try:
 			await context.bot.send_message(user.id, message)
 		except Forbidden:
@@ -252,7 +247,7 @@ async def list_subscriber_names(update, context):
 
 async def error_callback(_, context):
 	if not isinstance(context.error, (Conflict, NetworkError)):
-		logger.error(context.error)
+		logger.error(context.error, exc_info=True)
 
 
 def main():
