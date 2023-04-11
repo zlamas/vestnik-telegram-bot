@@ -24,7 +24,8 @@ from telegram.ext import (
 from telegram.error import (
 	Conflict,
 	Forbidden,
-	NetworkError
+	NetworkError,
+	TimedOut
 )
 
 MEMBER_STATUSES = [
@@ -87,6 +88,21 @@ def extract_status_change(chat_member_update):
 	return was_member, is_member
 
 
+def retry_on_network_error(func):
+	async def _wrapper(*args, **kwargs):
+		retry, max_retries = 0, 5
+		while True:
+			try:
+				return await func(*args, **kwargs)
+			except NetworkError:
+				if retry == max_retries:
+					logger.error("Max retries exceeded")
+					return
+				retry += 1
+				logger.error("Network error, retrying... (%s/%s)", retry, max_retries)
+	return _wrapper
+
+
 async def is_channel_member(update, context):
 	user_id = update.effective_user.id
 	member = await context.bot.get_chat_member(config.get('keys', 'channel'), user_id)
@@ -138,12 +154,16 @@ async def send_daily_card(context, user_id):
 	else:
 		card_name = f"{data['roman'][card_id]} {data['major'][card_id]}"
 
-	try:
+	@retry_on_network_error
+	async def send_message():
 		await context.bot.send_photo(
 			user_id,
 			f"{config.get('paths', 'cards')}/{deck_id}/{card_id}.jpg",
 			caption.format(card_name, deck_name, meanings[card_id])
 		)
+
+	try:
+		await send_message()
 	except Forbidden:
 		remove_blocked_user(await context.bot.get_chat(user_id))
 
@@ -246,7 +266,8 @@ async def list_subscriber_names(update, context):
 
 
 async def error_callback(_, context):
-	if not isinstance(context.error, (Conflict, NetworkError)):
+	if (not isinstance(context.error, (Conflict, NetworkError))
+	or	isinstance(context.error, TimedOut)):
 		logger.error(context.error, exc_info=True)
 
 
@@ -267,6 +288,9 @@ def main():
 		Application.builder()
 		.token(config.get('keys', 'token'))
 		.defaults(Defaults(parse_mode='HTML'))
+		.connect_timeout(30)
+		.read_timeout(30)
+		.write_timeout(30)
 		.build()
 	)
 
