@@ -137,8 +137,8 @@ async def send_daily_card(context, user_id):
 		caption = f.read()
 
 	card_id = random.randrange(78)
-	decks = list(data['decks'].items())
-	deck_id, deck_name = random.choice(decks)
+	decks = data['decks']
+	deck_id = random.choice(list(decks))
 	meanings = data['meanings'].get(deck_id) or data['meanings']['normal']
 
 	if card_id > 21:
@@ -159,7 +159,7 @@ async def send_daily_card(context, user_id):
 		await context.bot.send_photo(
 			user_id,
 			f"{config.get('paths', 'cards')}/{deck_id}/{card_id}.jpg",
-			caption.format(card_name, deck_name, meanings[card_id])
+			caption.format(card_name, decks[deck_id], meanings[card_id])
 		)
 
 	try:
