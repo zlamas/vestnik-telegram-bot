@@ -229,10 +229,13 @@ async def track_channel_members(update, context):
 			pass
 
 
-async def blocked_handler(update, _):
-	bot = update.my_chat_member.new_chat_member
-	if bot.status == ChatMember.BANNED:
-		remove_blocked_user(update.effective_chat)
+async def block_unblock_handler(update, _):
+	new_status = update.my_chat_member.new_chat_member.status
+	user = update.effective_user
+	if new_status == ChatMember.BANNED:
+		remove_blocked_user(user)
+	else:
+		logger.info("%s (%s) unblocked the bot", user.full_name, user.id)
 
 
 async def request_greet(update, _):
@@ -313,7 +316,7 @@ def main():
 		ChatMemberHandler.CHAT_MEMBER
 	))
 	application.add_handler(ChatMemberHandler(
-		blocked_handler,
+		block_unblock_handler,
 		ChatMemberHandler.MY_CHAT_MEMBER
 	))
 
