@@ -335,7 +335,8 @@ def main():
 
 	application.job_queue.run_daily(
 		send_daily_message,
-		datetime.time(**job_time)
+		datetime.time(**job_time),
+		job_kwargs={'misfire_grace_time': None}
 	)
 
 	application.run_polling(allowed_updates=Update.ALL_TYPES)
