@@ -159,7 +159,7 @@ async def send_daily_card(context, user_id):
 	async def send_message():
 		await context.bot.send_photo(
 			user_id,
-			f"{config.get('paths', 'cards')}/{deck_id}/{card_id}.jpg",
+			f"{config.get('paths', 'card_dir')}/{deck_id}/{card_id}.jpg",
 			caption.format(card_name, decks[deck_id], meanings[card_id])
 		)
 
