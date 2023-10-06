@@ -104,6 +104,40 @@ def retry_on_network_error(func):
 	return _wrapper
 
 
+def generate_daily_card():
+	with open(config.get('paths', 'data')) as f:
+		data = json.load(f)
+
+	with open(config.get('paths', 'card_caption')) as f:
+		caption = f.read()
+
+	classic_id = card_id = random.randrange(78)
+	decks = data['decks']
+	deck_id = random.choice(list(decks))
+	meanings = data['meanings'].get(deck_id) or data['meanings']['normal']
+
+	if card_id > 21:
+		rank = (card_id - 22) % 14
+		suit = (card_id - 22) // 14
+
+		rank_names = data['ranks']
+		if deck_id in data['altRanks']:
+			rank_names[10:] = data['altRanks'][deck_id]
+		suit_names = data['altSuits'].get(deck_id) or data['suits']
+
+		card_name = f"{rank_names[rank]} {suit_names[suit]}"
+	else:
+		if (card_id == 8 or card_id == 11) and deck_id in data['classicOrder']:
+			classic_id = 19 - card_id
+
+		card_name = f"{data['roman'][classic_id]} {data['major'][card_id]}"
+
+	return (
+		f"{config.get('paths', 'card_dir')}/{deck_id}/{classic_id}.jpg",
+		caption.format(card_name, decks[deck_id], meanings[card_id])
+	)
+
+
 async def is_channel_member(update, context):
 	user_id = update.effective_user.id
 	member = await context.bot.get_chat_member(config.get('keys', 'channel'), user_id)
@@ -130,41 +164,15 @@ async def subscribe_daily(update):
 	await update.effective_message.reply_text(response)
 
 
+@retry_on_network_error
+async def send_photo_with_retry(context, user_id, path, message):
+	await context.bot.send_photo(user_id, path, message)
+
+
 async def send_daily_card(context, user_id):
-	with open(config.get('paths', 'data')) as f:
-		data = json.load(f)
-
-	with open(config.get('paths', 'card_caption')) as f:
-		caption = f.read()
-
-	card_id = random.randrange(78)
-	decks = data['decks']
-	deck_id = random.choice(list(decks))
-	meanings = data['meanings'].get(deck_id) or data['meanings']['normal']
-
-	if card_id > 21:
-		rank = (card_id - 22) % 14
-		suit = (card_id - 22) // 14
-
-		rank_names = data['ranks']
-		if deck_id in data['altRanks']:
-			rank_names[10:] = data['altRanks'][deck_id]
-		suit_names = data['altSuits'].get(deck_id) or data['suits']
-
-		card_name = f"{rank_names[rank]} {suit_names[suit]}"
-	else:
-		card_name = f"{data['roman'][card_id]} {data['major'][card_id]}"
-
-	@retry_on_network_error
-	async def send_message():
-		await context.bot.send_photo(
-			user_id,
-			f"{config.get('paths', 'card_dir')}/{deck_id}/{card_id}.jpg",
-			caption.format(card_name, decks[deck_id], meanings[card_id])
-		)
-
+	path, message = generate_daily_card()
 	try:
-		await send_message()
+		await send_photo_with_retry(context, user_id, path, message)
 	except Forbidden:
 		remove_blocked_user(await context.bot.get_chat(user_id))
 
