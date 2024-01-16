@@ -173,7 +173,7 @@ async def send_photo_with_retry(context, user_id, path, message):
 	await context.bot.send_photo(user_id, path, message)
 
 
-async def send_daily_card(context, user_id):
+async def send_daily_card_to(context, user_id):
 	path, message = generate_daily_card()
 	try:
 		await send_photo_with_retry(context, user_id, path, message)
@@ -264,13 +264,13 @@ async def unknown_command_handler(update, _):
 	await update.message.reply_text("Такой команды ещё не придумали!")
 
 
-async def send_daily_message(context):
+async def send_daily_card(context):
 	for user_id in daily_list:
-		await send_daily_card(context, user_id)
+		await send_daily_card_to(context, user_id)
 
 
 async def send_test_card(update, context):
-	await send_daily_card(context, update.effective_user.id)
+	await send_daily_card_to(context, update.effective_user.id)
 
 
 async def list_subscriber_names(update, context):
@@ -319,6 +319,11 @@ def main():
 		admin_filter
 	))
 	application.add_handler(CommandHandler(
+		'senddailycard',
+		lambda _, context: send_daily_card(context),
+		admin_filter
+	))
+	application.add_handler(CommandHandler(
 		'listsubnames',
 		list_subscriber_names,
 		admin_filter
@@ -349,7 +354,7 @@ def main():
 	application.add_error_handler(error_callback)
 
 	application.job_queue.run_daily(
-		send_daily_message,
+		send_daily_card,
 		datetime.time(**job_time),
 		job_kwargs={'misfire_grace_time': None}
 	)
