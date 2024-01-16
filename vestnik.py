@@ -49,25 +49,32 @@ config.read('vestnik.ini')
 def load_daily_list():
 	global daily_list
 	with open(config.get('paths', 'sub_list')) as f:
-		daily_list = json.load(f)
+		daily_list = f.read().split()
 
 
 def save_daily_list():
 	with open(config.get('paths', 'sub_list'), 'w') as f:
-		json.dump(daily_list, f)
+		print(*daily_list, sep='\n', file=f)
+
+
+def is_subscribed(user_id):
+	return str(user_id) in daily_list
 
 
 def add_user(user):
-	daily_list.append(user.id)
+	if is_subscribed(user.id):
+		return True
+
+	daily_list.append(str(user.id))
 	save_daily_list()
 	logger.info("Adding user %s (%s) to messaging list", user.full_name, user.id)
 
 
 def remove_user(user):
-	if user.id not in daily_list:
+	if not is_subscribed(user.id):
 		return
 
-	daily_list.remove(user.id)
+	daily_list.remove(str(user.id))
 	save_daily_list()
 	logger.info("Removing user %s (%s) from messaging list", user.full_name, user.id)
 
@@ -132,10 +139,8 @@ def generate_daily_card():
 
 		card_name = f"{data['roman'][classic_id]} {data['major'][card_id]}"
 
-	return (
-		f"{config.get('paths', 'card_dir')}/{deck_id}/{classic_id}.jpg",
-		caption.format(card_name, decks[deck_id], meanings[card_id])
-	)
+	return (f"{config.get('paths', 'card_dir')}/{deck_id}/{classic_id}.jpg",
+		caption.format(card_name, decks[deck_id], meanings[card_id]))
 
 
 async def is_channel_member(update, context):
@@ -154,11 +159,10 @@ async def stranger_reply(update):
 async def subscribe_daily(update):
 	user = update.effective_user
 
-	if user.id in daily_list:
+	if add_user(user):
 		response = "Вы уже подписаны!"
 	else:
 		logger.info("%s (%s) subscribed to bot", user.full_name, user.id)
-		add_user(user)
 		response = "Подписка оформлена!"
 
 	await update.effective_message.reply_text(response)
@@ -187,9 +191,12 @@ async def start(update, context):
 	else:
 		user = update.effective_user
 
-	markup = InlineKeyboardMarkup([[
-		InlineKeyboardButton("Подписаться", callback_data='sub_daily')
-	]]) if user.id not in daily_list else None
+	kwargs = {}
+
+	if not is_subscribed(user.id):
+		kwargs['reply_markup'] = InlineKeyboardMarkup([[
+			InlineKeyboardButton("Подписаться", callback_data='sub_daily')
+		]])
 
 	with open(config.get('paths', 'welcome')) as f:
 		welcome_message = f.read()
@@ -197,7 +204,7 @@ async def start(update, context):
 	await user.send_photo(
 		config.get('paths', 'welcome_image'),
 		welcome_message,
-		reply_markup=markup
+		**kwargs
 	)
 
 
@@ -278,8 +285,7 @@ async def list_subscriber_names(update, context):
 
 
 async def error_callback(_, context):
-	if (not isinstance(context.error, (Conflict, NetworkError))
-	or	isinstance(context.error, TimedOut)):
+	if (not isinstance(context.error, (Conflict, NetworkError))):
 		logger.error(context.error, exc_info=True)
 
 
