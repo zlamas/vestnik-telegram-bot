@@ -24,8 +24,7 @@ from telegram.ext import (
 from telegram.error import (
 	Conflict,
 	Forbidden,
-	NetworkError,
-	TimedOut
+	NetworkError
 )
 
 MEMBER_STATUSES = [
@@ -264,9 +263,12 @@ async def unknown_command_handler(update, _):
 	await update.message.reply_text("Такой команды ещё не придумали!")
 
 
-async def send_daily_card(context):
+async def send_daily_card(context, update = None):
 	for user_id in daily_list:
 		await send_daily_card_to(context, user_id)
+
+	if update is not None:
+		await update.message.reply_text("Работа выполнена!");
 
 
 async def send_test_card(update, context):
@@ -285,7 +287,7 @@ async def list_subscriber_names(update, context):
 
 
 async def error_callback(_, context):
-	if (not isinstance(context.error, (Conflict, NetworkError))):
+	if not isinstance(context.error, (Conflict, NetworkError)):
 		logger.error(context.error, exc_info=True)
 
 
@@ -320,7 +322,7 @@ def main():
 	))
 	application.add_handler(CommandHandler(
 		'senddailycard',
-		lambda _, context: send_daily_card(context),
+		lambda update, context: send_daily_card(context, update),
 		admin_filter
 	))
 	application.add_handler(CommandHandler(
